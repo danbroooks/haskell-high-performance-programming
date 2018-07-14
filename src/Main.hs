@@ -1,4 +1,51 @@
+{-# LANGUAGE DeriveGeneric   #-}
+{-# LANGUAGE TemplateHaskell #-}
+
 module Main where
 
+import           Control.Distributed.Process
+import           Control.Distributed.Process.Backend.SimpleLocalnet
+import           Control.Distributed.Process.Closure (mkStaticClosure, remotable)
+import           Control.Distributed.Process.Node (initRemoteTable)
+import           Data.Binary (Binary)
+import           Data.Typeable (Typeable)
+import           GHC.Generics (Generic)
+
+data SummerMsg
+  = Add Int ProcessId
+  | Value Int
+  deriving (Show, Typeable, Generic)
+
+instance Binary SummerMsg
+
+summerProc :: Process ()
+summerProc = go 0
+  where
+    go s = do
+      msg@(Add num from) <- expect
+      say $ "received msg: " ++ show msg
+      let s' = s + num
+      send from (Value s')
+      go s'
+
+remotable ['summerProc]
+
+summerTest :: Process ()
+summerTest = do
+  node <- getSelfNode
+  summerPid <- spawn node $(mkStaticClosure 'summerProc)
+
+  mypid <- getSelfPid
+
+  send summerPid (Add 5 mypid)
+  send summerPid (Add 7 mypid)
+
+  Value n <- expect
+  say $ "updated value: " ++ show n
+  Value n' <- expect
+  say $ "updated value: " ++ show n'
+
 main :: IO ()
-main = putStrLn "hello"
+main = do
+  backend <- initializeBackend "localhost" "9000" $ __remoteTable initRemoteTable
+  startMaster backend $ \_ -> summerTest
